@@ -41,7 +41,7 @@ class TextDataset(Dataset):  # 定义自定义数据集
         label = int(self.all_labels[index])  # 标签转为整数
 
         text_idx = [self.word_2_index.get(i, 1) for i in text]  # 转化为索引序列，未知字用1
-        text_idx = text_idx + [0] * (self.max_len - len(text_idx))  # 若长度不足，用0补齐
+        text_idx = text_idx + [0] * (self.max_len - len(text_idx))  # 若长度不足，用0填充
 
         text_idx = torch.LongTensor(text_idx).unsqueeze(dim=0)  # 转成Tensor，增加一个维度(卷积要求)
 
@@ -51,19 +51,19 @@ class TextDataset(Dataset):  # 定义自定义数据集
         return len(self.all_text)
 
 
-class Block(nn.Module):  # 定义一个卷积块
+class Block(nn.Module):  # 定义一个卷积块,有三个部分，卷积层、激活层、池化层
     def __init__(self, kernel_s, embedding_num, max_len, hidden_num):
         super().__init__()
-        self.cnn = nn.Conv2d(in_channels=1, out_channels=hidden_num, kernel_size=(kernel_s, embedding_num))  # 定义卷积层
+        self.cnn = nn.Conv2d(in_channels=1, out_channels=hidden_num, kernel_size=(kernel_s, embedding_num))  # 定义卷积层，kernel_s为卷积核的高，embedding_num为卷积核的宽
         self.act = nn.ReLU()  # ReLU 激活
-        self.mxp = nn.MaxPool1d(kernel_size=(max_len - kernel_s + 1))  # 最大池化（池化窗口根据输入序列长度而定）
+        self.mxp = nn.MaxPool1d(kernel_size=(max_len - kernel_s + 1))  # 最大池化，句子的最大长度max_len-卷积核的高kernel_s+1
 
     def forward(self, batch_emb):  # 前向传播
         c = self.cnn.forward(batch_emb)  # 进行卷积
         a = self.act.forward(c)  # 激活操作
-        a = a.squeeze(dim=-1)  # 去掉embedding维度
+        a = a.squeeze(dim=-1)  # 去掉最后一个维度
         m = self.mxp.forward(a)  # 最大池化
-        m = m.squeeze(dim=-1)  # 去掉pool维度
+        m = m.squeeze(dim=-1)
 
         return m  # 返回池化后的特征
 
@@ -79,16 +79,16 @@ class TextCNNModel(nn.Module):  # 定义TextCNN模型结构
         self.emb_matrix = emb_matrix  # 保存embedding层
 
         self.classifier = nn.Linear(hidden_num * 3, class_num)  # 全连接层，输入为三个block拼接
-        self.loss_fun = nn.CrossEntropyLoss()  # 使用交叉熵损失
+        self.loss_fun = nn.CrossEntropyLoss()  # 使用交叉熵损失，包含softmax
 
     def forward(self, batch_idx, batch_label=None):  # batch_label 决定是否训练
-        batch_emb = self.emb_matrix(batch_idx)  # 获取embedding
+        batch_emb = self.emb_matrix(batch_idx)  # batch_idx为文本索引序列转成embedding，论文中的输入1*7*5
         b1_result = self.block1.forward(batch_emb)  # 2卷积核结果
         b2_result = self.block2.forward(batch_emb)  # 3卷积核结果
         b3_result = self.block3.forward(batch_emb)  # 4卷积核结果
 
         feature = torch.cat([b1_result, b2_result, b3_result], dim=1)  # 拼接所有卷积特征
-        pre = self.classifier(feature)  # 分类输出
+        pre = self.classifier(feature)  # 拼接完之后进行分类
 
         if batch_label is not None:  # 若传入标签 → 训练模式
             loss = self.loss_fun(pre, batch_label)  # 计算损失
@@ -101,18 +101,19 @@ if __name__ == "__main__":  # 主程序
     train_text, train_label = read_data("train")  # 读取训练集数据
     dev_text, dev_label = read_data("dev")  # 读取验证集
 
-    embedding_num = 200  # 词向量维度
-    max_len = 120  # 最大序列长度
-    batch_size = 128  # batch大小
+    embedding_num = 200  # 词向量维度，论文中为5
+    max_len = 120  # 句子最大长度，论文中为7
+    batch_size = 128  # 批次大小，论文中为1
     epoch = 20  # 训练轮数
+
     hidden_num = 100  # 卷积输出通道数
-    class_num = len(set(train_label))  # 类别数量
+    class_num = len(set(train_label))  # 分类数
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")  # 优先使用GPU
 
     word_2_index, words_embedding = built_corpus(train_text, embedding_num)  # 构建词典与embedding
 
     train_dataset = TextDataset(train_text, train_label, word_2_index, max_len)  # 训练集Dataset
-    train_loader = DataLoader(train_dataset, batch_size, shuffle=False)  # DataLoader
+    train_loader = DataLoader(train_dataset, batch_size, shuffle=False)  # 数据加载器
 
     dev_dataset = TextDataset(dev_text, dev_label, word_2_index, max_len)  # 验证集Dataset
     dev_loader = DataLoader(dev_dataset, batch_size, shuffle=False)  # DataLoader
@@ -131,7 +132,7 @@ if __name__ == "__main__":  # 主程序
 
             print(f"loss:{loss:.3f}")  # 打印当前loss
 
-            right_num = 0  # 统计正确个数
+            right_num = 0  # 预测正确个数
             for batch_idx, batch_label in dev_loader:  # 遍历验证集
                 batch_idx = batch_idx.to(device)
                 batch_label = batch_label.to(device)
